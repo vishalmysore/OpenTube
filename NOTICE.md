@@ -4,11 +4,11 @@ OpenTube Graph is an independent project inspired by Andrej Karpathy's HackerTub
 
 ## This project
 
-The pipeline, pages, labels and generated site data in this repository are Copyright 2026 vishalmysore and licensed under the Apache License, Version 2.0 (see `LICENSE`).
+The pipeline code, pages, labels, metrics and graph structure in this repository are Copyright 2026 vishalmysore and licensed under the Apache License, Version 2.0 (see `LICENSE`). That license does not cover the Hacker News comment text and thread titles described below, which stay with their authors.
 
 ## Data
 
-- **Hacker News archive:** [`open-index/hacker-news`](https://huggingface.co/datasets/open-index/hacker-news) on Hugging Face, released under the Open Data Commons Attribution License (ODC-By). `web/data/` contains short excerpts of Hacker News comments (attributed by username and linked to the original item) and thread titles derived from it. Hacker News content belongs to its authors.
+- **Hacker News archive:** [`open-index/hacker-news`](https://huggingface.co/datasets/open-index/hacker-news) on Hugging Face, released under the Open Data Commons Attribution License (ODC-By). `data/sample.jsonl` and `data/slice_canon.jsonl` contain the full text of about 3,000 Hacker News comments, and `web/data/` contains the comments and excerpts shown on the site, each attributed by username and linked to the original item, plus thread titles. They are included for research and attribution only. Hacker News content belongs to its authors. If you wrote a comment included here and want it removed, open an issue at https://github.com/vishalmysore/OpenTube/issues.
 - **YouTube:** only video IDs are stored. Thumbnails load from `i.ytimg.com` and titles from `noembed.com` in the viewer's browser at view time; nothing from YouTube is redistributed.
 
 ## Models (downloaded at runtime or by `scripts/download_models.sh`; not part of this repository)
