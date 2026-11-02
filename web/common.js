@@ -65,7 +65,7 @@ export function nav(current) {
 }
 
 export function footer() {
-  return `<footer class="foot">Data: <a href="https://huggingface.co/datasets/open-index/hacker-news">open-index/hacker-news</a> (ODC-By). Stage 1: <a href="https://huggingface.co/VishalMysore/layaForWebTrained">Laya typed-decisions</a> (ONNX). Stage 2: Qwen2.5-1.5B-Instruct (<a href="https://github.com/mlc-ai/web-llm">WebLLM</a> in the browser, ONNX offline). Retrieval: all-MiniLM-L6-v2 + SAGE-style graph expansion. Inspired by Andrej Karpathy's HackerTube; not affiliated with him, Hacker News or YouTube. <a href="https://github.com/vishalmysore/openTubeGraph">Source</a> · Apache-2.0.</footer>`;
+  return `<footer class="foot">Data: <a href="https://huggingface.co/datasets/open-index/hacker-news">open-index/hacker-news</a> (ODC-By). Stage 1: <a href="https://huggingface.co/VishalMysore/layaForWebTrained">Laya typed-decisions</a> (ONNX). Stage 2: Qwen2.5-1.5B-Instruct (<a href="https://github.com/mlc-ai/web-llm">WebLLM</a> in the browser, ONNX offline). Retrieval: all-MiniLM-L6-v2 + SAGE-style graph expansion. Inspired by Andrej Karpathy's HackerTube; not affiliated with him, Hacker News or YouTube. <a href="https://github.com/vishalmysore/OpenTube">Source</a> · Apache-2.0.</footer>`;
 }
 
 export function mountChrome(current) {

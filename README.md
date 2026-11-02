@@ -8,7 +8,7 @@
 
 The filter is a cascade. **Laya**, a typed-decision model, makes the cheap yes/no call on "is this comment recommending the video?". **Qwen2.5-1.5B-Instruct** only sees the comments Laya is unsure about. That gives the cost comparison for free.
 
-**Live demo:** https://vishalmysore.github.io/openTubeGraph/
+**Live demo:** https://vishalmysore.github.io/OpenTube/
 
 | Page | What it does |
 |---|---|
