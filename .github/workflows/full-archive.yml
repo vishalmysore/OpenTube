@@ -1,0 +1,62 @@
+# Run the whole cascade over every YouTube-linking HN comment (~257K) on free GitHub-hosted runners.
+# One job per month, so no job comes near the 6-hour limit. Started by hand; not part of the Pages deploy.
+# Untested at full scale: the per-month commands are the same ones used to build the published canon.
+name: Full-archive cascade
+
+on:
+  workflow_dispatch:
+    inputs:
+      from: { description: "First month (YYYY-MM)", default: "2007-01" }
+      to: { description: "Last month (YYYY-MM)", default: "2026-08" }
+      lo: { description: "Laya reject at p <=", default: "0.53" }
+      hi: { description: "Laya accept at p >=", default: "0.61" }
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      months: ${{ steps.m.outputs.months }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pyarrow numpy
+      - name: Stage 0 (regex over the archive)
+        run: python3 -I pipeline/extract.py --out data/work --from ${{ inputs.from }} --to ${{ inputs.to }}
+      - name: Resolve threads, split by month
+        run: |
+          python3 -I pipeline/build_candidates.py --work data/work --out data/candidates.jsonl
+          mkdir -p data/months && python3 -I -c "
+          import json,collections
+          f=collections.defaultdict(list)
+          for l in open('data/candidates.jsonl'): f[json.loads(l)['time'][:7]].append(l)
+          for k,v in f.items(): open(f'data/months/{k}.jsonl','w').writelines(v)
+          print(json.dumps(sorted(f)))" > months.json
+      - id: m
+        run: echo "months=$(cat months.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with: { name: months, path: data/months, retention-days: 7 }
+
+  cascade:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        month: ${{ fromJSON(needs.prepare.outputs.months) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm ci
+      - name: Download models
+        run: bash scripts/download_models.sh
+      - uses: actions/download-artifact@v4
+        with: { name: months, path: data/months }
+      - name: Laya, then the LLM for unsure comments
+        run: node pipeline/run_stage.mjs cascade data/months/${{ matrix.month }}.jsonl out/${{ matrix.month }}.jsonl --lo ${{ inputs.lo }} --hi ${{ inputs.hi }} --threads 4
+      - uses: actions/upload-artifact@v4
+        with: { name: "cascade-${{ matrix.month }}", path: out, retention-days: 30 }

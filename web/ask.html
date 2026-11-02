@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenTube Graph Ask</title>
+<meta name="description" content="GraphRAG over Hacker News's most re-linked YouTube videos: MiniLM retrieval plus SAGE-style graph expansion along shared threads and commenters, answered by WebLLM in your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d9480f'/%3E%3Cpath d='M12 9v14l11-7z' fill='white'/%3E%3C/svg%3E">
+<script src="./coi.js"></script>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<main class="wrap">
+  <section class="hero">
+    <h1>Ask the graph</h1>
+    <p>Ask what to watch. Your question is embedded in the browser, the closest videos become seeds, and the graph pulls in their neighbours: videos linked in the same HN threads, by the same people, or with similar recommendations (structure-aware graph expansion, after SAGE). A small LLM running in your browser writes the answer from that context and cites it.</p>
+  </section>
+  <section class="card">
+    <div class="toolbar" style="margin-top:0">
+      <input type="search" id="q" placeholder="e.g. talks that changed how people think about software design" aria-label="Question" style="flex:1 1 320px">
+      <button id="ask" class="primary">Ask</button>
+      <label class="price"><input type="checkbox" id="useLLM" checked> write an answer with WebLLM</label>
+    </div>
+    <div class="examples" id="examples"></div>
+    <div class="progress"><i id="prog"></i></div>
+    <p class="status" id="status">The first question downloads the embedding model (about 23 MB). Answers need WebGPU and a one-time 1 GB model download; without them you still get the retrieved videos and the graph.</p>
+  </section>
+  <div class="ask" style="margin-top:12px">
+    <section class="card">
+      <h2>Answer</h2>
+      <div class="answer" id="answer"><span class="muted">Ask something above.</span></div>
+      <p class="note" id="answerMeta"></p>
+      <h2 style="margin-top:14px">Context the model saw</h2>
+      <ol class="ctx" id="ctx"></ol>
+    </section>
+    <section class="card">
+      <h2>Retrieved subgraph</h2>
+      <div class="graphbox" id="graph"><svg id="svg" role="img" aria-label="Graph of retrieved videos, their topics, threads and people"></svg></div>
+      <div class="legend"><span><i style="background:var(--accent)"></i>seed video</span><span><i style="background:var(--warn)"></i>expanded video</span><span><i style="background:var(--laya)"></i>topic</span><span><i style="background:var(--ink3)"></i>HN thread</span><span><i style="background:var(--llm)"></i>commenter</span></div>
+      <p class="note" id="graphNote"></p>
+    </section>
+  </div>
+</main>
+<script type="module">
+import { $, esc, fmt, TOPIC, thumb, watch, hnItem, load, videoTitle, mountChrome } from "./common.js";
+import { scoreAll, sageRetrieve, buildAdjacency, row } from "./sage.js";
+import { LLM_MODEL } from "./llm-prompt.js";
+mountChrome("ask.html");
+
+const [videos, graph, vbuf] = await Promise.all([load("videos.json"), load("graph.json"), load("vectors.i8")]);
+const mat = new Int8Array(vbuf), D = graph.dim, N = videos.length;
+const adj = buildAdjacency(N, graph.edges);
+const maxP = Math.max(...videos.map((x) => x.people));
+const popularity = Float32Array.from(videos.map((x) => Math.log(x.people) / Math.log(maxP)));
+const isRec = videos.map((x) => x.rec > 0);
+const EX = ["talks that changed how people think about software design", "best lectures to learn physics as an adult", "documentaries about the history of computing", "videos that explain neural networks visually", "great talks about debugging and performance", "something about rockets and spaceflight"];
+$("examples").innerHTML = EX.map((e) => `<button class="chip">${esc(e)}</button>`).join("");
+$("examples").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { $("q").value = b.textContent; ask(); } });
+
+const status = (t, warn) => { $("status").textContent = t; $("status").classList.toggle("warn", !!warn); };
+const prog = (f) => { $("prog").style.width = f == null ? "0" : (f * 100).toFixed(1) + "%"; };
+let embedder = null;
+async function getEmbedder() {
+  if (!embedder) { const { loadEmbedder } = await import("./embedder.js"); embedder = await loadEmbedder({ onStatus: status, onProgress: prog }); prog(1); }
+  return embedder;
+}
+
+function describe(hit, kind) {
+  if (kind === "seed") return `seed · similarity ${hit.score.toFixed(2)}`;
+  const from = videos[hit.from];
+  if (hit.kind === "thread") return `linked in the same thread as [${hit.fromN}]: “${hit.via?.[1] || "HN thread"}”`;
+  if (hit.kind === "person") return `${hit.via} linked both this and [${hit.fromN}]`;
+  return `recommended in similar terms to [${hit.fromN}]`;
+}
+
+async function retrieve(q, focus = null) {
+  let scores;
+  if (focus != null) {
+    scores = scoreAll(row(mat, D, focus), mat, D);
+  } else {
+    const E = await getEmbedder();
+    const [qv] = await E.embed([q]);
+    scores = scoreAll(qv, mat, D);
+  }
+  // Only videos the filter kept are answers; filtered-out ones (music, memes) still shape the graph but are not cited.
+  for (let i = 0; i < N; i++) if (!isRec[i]) scores[i] = -1;
+  const res = sageRetrieve(scores, adj, { seeds: 4, expand: 6, popularity, alpha: 0.12 });
+  if (focus != null && !res.seeds.some((s) => s.i === focus)) res.seeds.unshift({ i: focus, score: 1 });
+  const items = [...res.seeds.map((s) => ({ ...s, kind: "seed" })), ...res.expanded.map((s) => ({ ...s, kind: "exp" }))];
+  items.forEach((it, k) => { it.n = k + 1; });
+  items.forEach((it) => { if (it.kind === "exp") it.fromN = items.find((x) => x.i === it.from)?.n; });
+  return items;
+}
+
+function contextBlock(items) {
+  return items.map((it) => {
+    const x = videos[it.i], t = it.title;
+    const quotes = [...x.sampled.filter((s) => s.rec), ...x.others].slice(0, 2).map((s) => `"${s.text.replace(/\[YouTube video\]/g, "(video)").slice(0, 260)}"`).join(" ");
+    return `[${it.n}] ${t?.t ? `"${t.t}"${t.a ? " by " + t.a : ""}` : "(title unknown)"}. Topic: ${TOPIC[x.topic]}. Linked by ${x.people} HN users, ${x.first.slice(0, 4)}-${x.last.slice(0, 4)}. Threads: ${x.threads.slice(0, 2).map((th) => th[1]).join("; ")}. Comments: ${quotes}`;
+  }).join("\n");
+}
+
+function renderCtx(items) {
+  $("ctx").innerHTML = items.map((it) => {
+    const x = videos[it.i];
+    const q = [...x.sampled.filter((s) => s.rec), ...x.others][0];
+    return `<li id="c${it.n}"><a href="${watch(x.v)}" target="_blank" rel="noopener"><img src="${thumb(x.v)}" alt="" loading="lazy"></a><div><div><span class="n">[${it.n}]</span> <a href="${watch(x.v)}" target="_blank" rel="noopener">${it.title?.t ? esc(it.title.t) : `Video linked in “${esc(x.threads[0]?.[1] || "an HN thread")}”`}</a></div><div class="why">${esc(describe(it, it.kind))} · ${x.people} people · ${esc(TOPIC[x.topic])}</div>${q ? `<div class="q">“${esc(q.text.replace(/\[YouTube video\]/g, "▶"))}” — ${esc(q.by)}</div>` : ""}</div></li>`;
+  }).join("");
+}
+
+// ---- small force layout for the retrieved subgraph ----
+function drawGraph(items) {
+  const nodes = [], links = [], idx = new Map();
+  const add = (key, label, type) => { if (!idx.has(key)) { idx.set(key, nodes.length); nodes.push({ key, label, type, x: Math.random() * 400, y: Math.random() * 300, vx: 0, vy: 0 }); } return idx.get(key); };
+  const vset = new Set(items.map((it) => it.i));
+  for (const it of items) {
+    const x = videos[it.i];
+    const a = add("v" + it.i, `[${it.n}]`, it.kind);
+    links.push([a, add("t" + x.topic, TOPIC[x.topic], "topic")]);
+  }
+  // structural edges among retrieved videos (thread / person), drawn through the shared node
+  for (const it of items) for (const e of adj[it.i]) {
+    if (!vset.has(e.j) || e.j < it.i) continue;
+    const a = idx.get("v" + it.i), b = idx.get("v" + e.j);
+    if (e.kind === "thread") { const t = add("h" + e.via[0], (e.via[1] || "thread").slice(0, 28), "thread"); links.push([a, t], [b, t]); }
+    else if (e.kind === "person") { const p = add("p" + e.via, e.via, "person"); links.push([a, p], [b, p]); }
+    else links.push([a, b, "sim"]);
+  }
+  const W = $("graph").clientWidth, H = $("graph").clientHeight;
+  for (let k = 0; k < 260; k++) {
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j]; let dx = a.x - b.x, dy = a.y - b.y; const d2 = dx * dx + dy * dy + 0.01, f = 1800 / d2;
+      a.vx += dx * f / Math.sqrt(d2); a.vy += dy * f / Math.sqrt(d2); b.vx -= dx * f / Math.sqrt(d2); b.vy -= dy * f / Math.sqrt(d2);
+    }
+    for (const [i, j] of links) { const a = nodes[i], b = nodes[j]; const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1, f = (d - 70) * 0.02; a.vx += dx / d * f; a.vy += dy / d * f; b.vx -= dx / d * f; b.vy -= dy / d * f; }
+    for (const n of nodes) { n.vx += (W / 2 - n.x) * 0.004; n.vy += (H / 2 - n.y) * 0.004; n.x += n.vx * 0.5; n.y += n.vy * 0.5; n.vx *= 0.6; n.vy *= 0.6; }
+  }
+  const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const sx = (x) => 30 + (x - x0) / Math.max(1, x1 - x0) * (W - 150), sy = (y) => 20 + (y - y0) / Math.max(1, y1 - y0) * (H - 40);
+  const col = { seed: "var(--accent)", exp: "var(--warn)", topic: "var(--laya)", thread: "var(--ink3)", person: "var(--llm)" };
+  const r = { seed: 9, exp: 7, topic: 6, thread: 5, person: 5 };
+  $("svg").setAttribute("viewBox", `0 0 ${W} ${H}`);
+  $("svg").innerHTML = links.map(([i, j, k]) => `<line x1="${sx(nodes[i].x)}" y1="${sy(nodes[i].y)}" x2="${sx(nodes[j].x)}" y2="${sy(nodes[j].y)}" stroke="var(--line)" stroke-width="${k === "sim" ? 1 : 1.5}" ${k === "sim" ? 'stroke-dasharray="3 3"' : ""}/>`).join("") +
+    nodes.map((n) => `<g><circle cx="${sx(n.x)}" cy="${sy(n.y)}" r="${r[n.type]}" fill="${col[n.type]}"><title>${esc(n.label)}</title></circle><text x="${sx(n.x) + r[n.type] + 3}" y="${sy(n.y) + 3}">${esc(n.label)}</text></g>`).join("");
+  $("graphNote").textContent = `${items.length} videos, ${nodes.length - items.length} topic, thread and commenter nodes. Dashed lines: similar recommendation text. The full graph has ${fmt(N)} videos and ${fmt(graph.edges.length)} edges.`;
+}
+
+const linkCites = (text) => esc(text).replace(/\[(\d+)\]/g, (m, n) => `<a class="cite" href="#c${n}">[${n}]</a>`);
+let busy = false;
+async function ask(focus = null) {
+  const q = $("q").value.trim();
+  if (busy || (!q && focus == null)) return;
+  busy = true; $("ask").disabled = true;
+  try {
+    status("Retrieving…");
+    const items = await retrieve(q, focus);
+    status("Looking up video titles…");
+    await Promise.all(items.map(async (it) => { it.title = await videoTitle(videos[it.i].v); }));
+    renderCtx(items); drawGraph(items);
+    if (focus != null && !q) { $("answer").innerHTML = `<span class="muted">Neighbourhood of [1]. Ask a question to get a written answer.</span>`; status("Showing the video's neighbourhood."); return; }
+    if (!$("useLLM").checked) { $("answer").innerHTML = `<span class="muted">Answer writing is off; the retrieved videos are on the left.</span>`; status("Done."); return; }
+    const { loadWebLLM, llmAnswer } = await import("./webllm.js");
+    await loadWebLLM(LLM_MODEL.webllm, { onStatus: status, onProgress: prog });
+    status("Writing the answer…");
+    const messages = [
+      { role: "system", content: "You suggest YouTube videos using ONLY the numbered context, which comes from Hacker News comments that recommended each video. Pick the 3 to 5 most relevant videos. For each, give one or two sentences on why HN readers recommend it, and cite it as [n]. Do not invent titles: if a title is unknown, describe the video from the comments. Be concise." },
+      { role: "user", content: `Context:\n${contextBlock(items)}\n\nQuestion: ${q}` },
+    ];
+    const r = await llmAnswer(messages, (t) => { $("answer").innerHTML = linkCites(t); });
+    $("answerMeta").textContent = `${LLM_MODEL.webllm} · ${(r.ms / 1000).toFixed(1)} s · ${r.usage?.prompt_tokens ?? "?"} prompt + ${r.usage?.completion_tokens ?? "?"} completion tokens, all on your device.`;
+    status("Done.");
+  } catch (e) { status(e.message, true); }
+  finally { busy = false; $("ask").disabled = false; }
+}
+$("ask").addEventListener("click", () => ask());
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
+const pv = new URLSearchParams(location.search).get("v");
+if (pv) { const i = videos.findIndex((x) => x.v === pv); if (i >= 0) ask(i); }
+</script>
+</body>
+</html>

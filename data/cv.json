@@ -1,0 +1,7 @@
+{
+ "laya": 0.7077,
+ "llm": 0.6773,
+ "cascade": 0.7117,
+ "to_llm": 0.321,
+ "method": "10 x repeated 2-fold CV: thresholds fit on 150 comments, scored on the other 150"
+}

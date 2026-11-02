@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenTube Graph Labels</title>
+<meta name="description" content="The labelled sample behind the accuracy numbers: 300 random Hacker News comments that link a YouTube video, with the rubric, the models' scores and a way to correct any label.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d9480f'/%3E%3Cpath d='M12 9v14l11-7z' fill='white'/%3E%3C/svg%3E">
+<script src="./coi.js"></script>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<main class="wrap">
+  <section class="hero">
+    <h1>The labelled sample</h1>
+    <p>300 comments drawn at random (fixed seed) from every Hacker News comment that links a YouTube video. These labels are the ground truth for the accuracy table. The first pass was written by Claude using the rubric below; change any label you disagree with and the <a href="./receipts.html">Receipts</a> page re-scores with your version. Your edits stay in this browser until you export them.</p>
+  </section>
+  <section class="card">
+    <h2>Rubric</h2>
+    <p class="small"><b>Recommends</b>: the commenter points readers to the video as worth watching, for example a talk, lecture, documentary, explainer, tutorial or a show they rate. A neutral “here's a good intro” counts. <b>Not a recommendation</b>: a bare link with no context, evidence or citation in an argument, a joke, meme or reaction clip, a music track, a news or political clip, a livestream link, or the commenter's own product or channel.</p>
+  </section>
+  <div class="toolbar">
+    <select id="filter" aria-label="Show">
+      <option value="all">All 300</option>
+      <option value="dis">Where the cascade disagrees with the label</option>
+      <option value="border">Borderline</option>
+      <option value="mine">Ones I changed</option>
+    </select>
+    <button id="exportBtn">Export labels (JSON)</button>
+    <label class="chip" style="cursor:pointer">Import <input type="file" id="importFile" accept=".json" hidden></label>
+    <button id="resetBtn">Discard my changes</button>
+    <span class="small muted" id="summary"></span>
+  </div>
+  <div class="lab" id="list"></div>
+</main>
+<script type="module">
+import { $, esc, load, mountChrome, hnItem, watch } from "./common.js";
+import { readOverrides, writeOverrides } from "./labels.js";
+import { cascadeDecision } from "./metrics.js";
+mountChrome("label.html");
+const [sample, R] = await Promise.all([load("sample.json"), load("receipts.json")]);
+let O = readOverrides();
+const lab = (s) => O[s.id]?.label ?? s.gold;
+function render() {
+  const f = $("filter").value;
+  const L = sample.filter((s) => f === "all" || (f === "border" && (O[s.id]?.borderline ?? s.borderline)) || (f === "mine" && O[s.id]) || (f === "dis" && cascadeDecision(s, R.thresholds).recommends !== (lab(s) === "recommends")));
+  $("summary").textContent = `${L.length} shown · ${sample.filter((s) => lab(s) === "recommends").length} labelled “recommends” · ${Object.keys(O).length} changed by you`;
+  $("list").innerHTML = L.map((s) => {
+    const d = cascadeDecision(s, R.thresholds), r = lab(s) === "recommends";
+    return `<div class="card labrow" data-id="${s.id}">
+      <div><div class="small muted">${esc(s.thread || "(no thread title)")} · <a href="${hnItem(s.id)}" target="_blank" rel="noopener">${esc(s.by)}, ${s.date}</a> · <a href="${watch(s.video)}" target="_blank" rel="noopener">video</a>${(O[s.id]?.borderline ?? s.borderline) ? ' · <span class="tag">borderline</span>' : ""}</div>
+        <div class="commentbox" style="margin-top:6px">${esc(s.comment)}</div>
+        <div class="small muted" style="margin-top:6px">Laya p=${s.laya_p} · LLM p=${s.llm_p} · cascade: <span class="tag ${d.route === "llm" ? "llm" : "laya"}">${d.route === "llm" ? "LLM" : "Laya"}</span> ${d.recommends ? "recommends" : "not"} ${d.recommends === r ? "✓" : "✗"}</div></div>
+      <div class="seg"><button data-l="recommends" aria-pressed="${r}">Recommends</button><button data-l="not_recommending" aria-pressed="${!r}">Not</button></div>
+    </div>`;
+  }).join("");
+}
+$("list").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-l]"); if (!b) return;
+  const id = +b.closest("[data-id]").dataset.id, s = sample.find((x) => x.id === id);
+  if (b.dataset.l === s.gold) delete O[id]; else O[id] = { label: b.dataset.l, borderline: s.borderline };
+  writeOverrides(O); render();
+});
+$("filter").addEventListener("input", render);
+$("resetBtn").addEventListener("click", () => { O = {}; writeOverrides(O); render(); });
+$("exportBtn").addEventListener("click", () => {
+  const out = sample.map((s) => ({ id: s.id, label: lab(s), borderline: O[s.id]?.borderline ?? s.borderline, labeler: O[s.id] ? "human" : s.labeler }));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 1)], { type: "application/json" }));
+  a.download = "labels.json"; a.click(); URL.revokeObjectURL(a.href);
+});
+$("importFile").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const arr = JSON.parse(await f.text());
+    O = {}; for (const x of arr) { const s = sample.find((y) => y.id === x.id); if (s && x.label !== s.gold) O[x.id] = { label: x.label, borderline: !!x.borderline }; }
+    writeOverrides(O); render();
+  } catch (err) { $("summary").textContent = "Could not read that file: " + err.message; }
+});
+render();
+</script>
+</body>
+</html>

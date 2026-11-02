@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenTube Graph Receipts</title>
+<meta name="description" content="How accurate the HackerTube-style filter is, what each stage costs, and a live run of the Laya then WebLLM cascade in your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d9480f'/%3E%3Cpath d='M12 9v14l11-7z' fill='white'/%3E%3C/svg%3E">
+<script src="./coi.js"></script>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<main class="wrap">
+  <section class="hero">
+    <h1>The receipts</h1>
+    <p>Three things a weekend build usually leaves out: how often the filter is right, what each stage costs, and whether you can rerun it yourself. Every number below comes from files in the repository.</p>
+  </section>
+
+  <section class="card">
+    <h2>1 · The funnel</h2>
+    <p class="small muted" id="funnelNote"></p>
+    <div class="funnel" id="funnel"></div>
+  </section>
+
+  <section class="card">
+    <h2>2 · How accurate is the filter?</h2>
+    <p class="small muted" id="accNote"></p>
+    <div class="toolbar">
+      <label class="price">Laya accepts at p ≥ <input type="number" id="hi" step="0.01" min="0" max="1"></label>
+      <label class="price">Laya rejects at p ≤ <input type="number" id="lo" step="0.01" min="0" max="1"></label>
+      <label class="price">LLM says yes at p ≥ <input type="number" id="llmT" step="0.01" min="0" max="1"></label>
+      <label class="price"><input type="checkbox" id="noBorder"> leave out the borderline comments</label>
+      <button id="resetTh">Reset</button>
+    </div>
+    <div class="tablewrap"><table class="t" id="accTable"></table></div>
+    <p class="note" id="accFoot"></p>
+  </section>
+
+  <section class="card">
+    <h2>3 · What does each stage cost?</h2>
+    <p class="small muted">Measured wall-clock time on <span id="hw"></span>, plus token counts. Prices are yours to set: the default for stage 1 is the list price of a hosted typed-decision model (Jev, $0.042 per million input tokens); the default for stage 2 is an example small hosted LLM. Running both models locally, as here, costs only the CPU time.</p>
+    <div class="toolbar">
+      <label class="price">Stage 1 $ / 1M tokens <input type="number" id="p1" step="0.001" value="0.042"></label>
+      <label class="price">Stage 2 $ / 1M tokens <input type="number" id="p2" step="0.01" value="0.20"></label>
+    </div>
+    <div class="two">
+      <div><h3 class="small">The re-linked canon (what this site shows)</h3><div class="tablewrap"><table class="t" id="costCanon"></table></div></div>
+      <div><h3 class="small">The full archive, projected from the measured rates</h3><div class="tablewrap"><table class="t" id="costFull"></table></div></div>
+    </div>
+    <p class="note" id="costFoot"></p>
+  </section>
+
+  <section class="card" id="live">
+    <h2>4 · Run the cascade in your browser</h2>
+    <p class="small muted">Laya (typed-decisions, ONNX, about 440 MB) answers first. If it is unsure, the comment goes to Qwen2.5-1.5B-Instruct running in WebLLM (about 1 GB, needs WebGPU). Both download once and stay in your browser's cache. Nothing you paste leaves the page.</p>
+    <div class="toolbar">
+      <button id="loadLaya" class="primary">Load Laya</button>
+      <button id="loadLLM">Load WebLLM</button>
+      <select id="variant" aria-label="Laya build"><option value="q8e8">Laya int8 (WASM)</option><option value="q4e8">Laya int4 (WebGPU)</option></select>
+    </div>
+    <div class="progress"><i id="prog"></i></div>
+    <p class="status" id="status">Models not loaded. The table above was produced offline; this lets you check single comments yourself.</p>
+    <div class="two" style="margin-top:10px">
+      <div>
+        <label class="small muted" for="thread">Thread title</label>
+        <input id="thread" style="width:100%" placeholder="Ask HN: What talks do you consider real gems?">
+        <label class="small muted" for="comment" style="display:block;margin-top:8px">Comment (any YouTube link is replaced with [YouTube video])</label>
+        <textarea id="comment" rows="6" placeholder="Paste a Hacker News comment…"></textarea>
+        <div class="toolbar"><button id="pick">Random labelled comment</button><button id="run" class="primary" disabled>Run the cascade</button><button id="bench" disabled>Time 10 comments</button></div>
+        <p class="small muted" id="goldNote"></p>
+      </div>
+      <div><ol class="steps" id="steps"></ol></div>
+    </div>
+  </section>
+</main>
+<script type="module">
+import { $, esc, fmt, pct, duration, load, mountChrome, yieldToBrowser } from "./common.js";
+import { evaluate } from "./metrics.js";
+import { cleanComment, window as win, RECOMMEND_Q } from "./text.js";
+import { LLM_MODEL } from "./llm-prompt.js";
+import { loadLabels } from "./labels.js";
+mountChrome("receipts.html");
+
+const [R, sampleRaw] = await Promise.all([load("receipts.json"), load("sample.json")]);
+const { labels, edited } = loadLabels(sampleRaw);
+const sample = sampleRaw.map((s) => ({ ...s, gold: labels.get(s.id)?.label ?? s.gold }));
+const s0 = R.stage0, C = R.canon, PI = R.per_item, F = R.full_archive;
+$("hw").textContent = R.hardware;
+
+// ---------- funnel ----------
+const fsteps = [
+  ["Every HN item", `${s0.months} monthly Parquet files, ${(s0.bytes / 1e9).toFixed(1)} GB`, s0.items, "var(--ink3)"],
+  ["Comments", "live, not dead or deleted", s0.comments, "var(--ink3)"],
+  ["…that link a YouTube video", "stage 0: a regular expression, free", s0.yt_comments, "var(--accent)"],
+  ["Distinct videos linked", "", s0.distinct_videos, "var(--accent)"],
+  ["Re-linked canon", "videos linked by 10 or more different people", C.canon_total, "var(--accent)"],
+  ["Comments judged", `minimal run: ${fmt(C.videos)} videos covered (up to 2 comments each)`, C.comments, "var(--laya)"],
+  ["Decided by Laya alone", `${fmt(C.routes.laya_accept)} kept, ${fmt(C.routes.laya_reject)} dropped`, C.routes.laya_accept + C.routes.laya_reject, "var(--laya)"],
+  ["Sent to the LLM", `${fmt(C.routes.llm_accept)} kept`, C.routes.llm, "var(--llm)"],
+  ["Videos kept", "at least one of its two comments recommends it", C.recommended_videos, "var(--ok)"],
+];
+const lg = (n) => Math.log10(Math.max(1, n));
+const maxL = lg(s0.items);
+$("funnel").innerHTML = fsteps.map(([a, b, n, col]) => `<div class="fstep"><div class="lbl"><b>${a}</b><span>${b}</span></div><div class="fbar"><i style="width:${Math.max(2, (lg(n) / maxL) * 100)}%;background:${col};opacity:.28"></i><em>${fmt(n)}</em></div></div>`).join("");
+$("funnelNote").textContent = `Bar lengths are on a log scale. Stage 0 read the whole archive in ${duration(s0.download_s + s0.process_s)} (${duration(s0.download_s)} of it downloading).`;
+
+// ---------- accuracy ----------
+const TH0 = R.thresholds;
+const th = { ...TH0 };
+const setInputs = () => { $("hi").value = th.hi; $("lo").value = th.lo; $("llmT").value = th.llm; };
+setInputs();
+const row = (name, m, extra, hl) => `<tr${hl ? ' class="hl"' : ""}><td>${name}</td><td class="n">${pct(m.accuracy, 1)} <span class="muted small">(${pct(m.accuracy_ci[0])}–${pct(m.accuracy_ci[1])})</span></td><td class="n">${pct(m.precision, 1)}</td><td class="n">${pct(m.recall, 1)}</td><td class="n">${m.f1.toFixed(2)}</td><td class="n">${m.auroc != null ? m.auroc.toFixed(2) : "–"}</td><td class="n">${(m.ms / 1000).toFixed(2)} s</td><td class="n">${extra}</td></tr>`;
+function renderAcc() {
+  const A = evaluate(sample, { ...th, laya: th.layaSingle ?? TH0.laya }, { excludeBorderline: $("noBorder").checked });
+  const S = A.summary;
+  $("accTable").innerHTML = `<thead><tr><th>Filter</th><th class="n">Accuracy (95% CI)</th><th class="n">Precision</th><th class="n">Recall</th><th class="n">F1</th><th class="n">AUROC</th><th class="n">Time / comment</th><th class="n">Sent to LLM</th></tr></thead><tbody>
+    ${row(`Laya only (p ≥ ${TH0.laya})`, S.laya, "0%")}
+    ${row(`LLM only (Qwen2.5-1.5B, p ≥ ${TH0.llm_only})`, S.llm, "100%")}
+    ${row("Cascade: Laya, then LLM if unsure", S.cascade, pct(S.cascade.to_llm), true)}</tbody>`;
+  $("accFoot").innerHTML = `${A.n} comments drawn at random from all ${fmt(s0.yt_comments)} YouTube-linking comments (${A.positives} recommend a video). When Laya decides alone it is right ${pct(S.laya_auto_accuracy, 1)} of the time (${S.laya_auto_n} comments). ` +
+    (edited ? `<b>Using your edited labels from the Labels page.</b> ` : `Labels: first pass by Claude with a written rubric, open for review on the <a href="./label.html">Labels</a> page. `) +
+    `Thresholds were chosen on this same sample, so the rows above are optimistic. Cross-validated (${esc(R.cv.method)}): Laya only ${pct(R.cv.laya, 1)}, LLM only ${pct(R.cv.llm, 1)}, cascade ${pct(R.cv.cascade, 1)} with ${pct(R.cv.to_llm)} sent to the LLM. For scale, answering “not a recommendation” every time scores ${pct(1 - A.positives / A.n, 1)}: this is a hard, fuzzy call, and ${sample.filter((s) => s.borderline).length} of the ${A.n} comments were borderline even for the labeller.`;
+}
+for (const id of ["hi", "lo", "llmT"]) $(id).addEventListener("input", () => { th.hi = +$("hi").value; th.lo = +$("lo").value; th.llm = +$("llmT").value; renderAcc(); });
+$("noBorder").addEventListener("input", renderAcc);
+$("resetTh").addEventListener("click", () => { Object.assign(th, TH0); setInputs(); renderAcc(); });
+$("accNote").innerHTML = `Rubric: a comment <b>recommends</b> a video when it points readers to it as worth watching (a talk, lecture, documentary, explainer or tutorial). It does <b>not</b> when the link is incidental, evidence in an argument, a joke or meme, music, a news or political clip, or self-promotion. ${sample.filter((s) => s.borderline).length} comments were hard to call and are flagged as borderline.`;
+renderAcc();
+
+// ---------- cost ----------
+function renderCost() {
+  const p1 = +$("p1").value / 1e6, p2 = +$("p2").value / 1e6;
+  const usd = (x) => x < 0.01 ? `$${x.toFixed(4)}` : `$${x.toFixed(2)}`;
+  $("costCanon").innerHTML = `<thead><tr><th>Stage</th><th class="n">Comments</th><th class="n">CPU time</th><th class="n">Tokens</th><th class="n">At your prices</th></tr></thead><tbody>
+    <tr><td>0 · regex over the archive</td><td class="n">${fmt(s0.comments)}</td><td class="n">${duration(s0.process_s)}</td><td class="n">–</td><td class="n">$0</td></tr>
+    <tr><td>1 · Laya on every candidate</td><td class="n">${fmt(C.comments)}</td><td class="n">${duration(C.laya_s)}</td><td class="n">${fmt(C.laya_tokens)}</td><td class="n">${usd(C.laya_tokens * p1)}</td></tr>
+    <tr><td>2 · LLM on the unsure ones</td><td class="n">${fmt(C.routes.llm)}</td><td class="n">${duration(C.llm_s)}</td><td class="n">${fmt(C.llm_tokens)}</td><td class="n">${usd(C.llm_tokens * p2)}</td></tr>
+    <tr class="hl"><td>Cascade total</td><td class="n"></td><td class="n">${duration(C.laya_s + C.llm_s)}</td><td class="n"></td><td class="n">${usd(C.laya_tokens * p1 + C.llm_tokens * p2)}</td></tr>
+    <tr><td>LLM on every candidate (estimate)</td><td class="n">${fmt(C.comments)}</td><td class="n">${duration(C.comments * PI.llm_ms / 1000)}</td><td class="n">${fmt(C.comments * PI.llm_tokens)}</td><td class="n">${usd(C.comments * PI.llm_tokens * p2)}</td></tr></tbody>`;
+  const frac = C.routes.llm / C.comments;
+  const fullLLMs = F.candidates * PI.llm_ms / 1000, fullLaya = F.candidates * PI.laya_ms / 1000;
+  $("costFull").innerHTML = `<thead><tr><th>Plan for all ${fmt(F.candidates)} comments</th><th class="n">CPU time (this machine)</th><th class="n">Tokens</th><th class="n">At your prices</th></tr></thead><tbody>
+    <tr><td>LLM on everything</td><td class="n">${duration(fullLLMs)}</td><td class="n">${fmt(F.qwen_prompt_tokens)}</td><td class="n">${usd(F.qwen_prompt_tokens * p2)}</td></tr>
+    <tr class="hl"><td>Cascade (${pct(frac)} to the LLM)</td><td class="n">${duration(fullLaya + frac * fullLLMs)}</td><td class="n">${fmt(F.laya_tokens)} + ${fmt(Math.round(frac * F.qwen_prompt_tokens))}</td><td class="n">${usd(F.laya_tokens * p1 + frac * F.qwen_prompt_tokens * p2)}</td></tr>
+    <tr><td>Laya only</td><td class="n">${duration(fullLaya)}</td><td class="n">${fmt(F.laya_tokens)}</td><td class="n">${usd(F.laya_tokens * p1)}</td></tr></tbody>`;
+  $("costFoot").textContent = `Per comment on this machine: Laya ${(PI.laya_ms / 1000).toFixed(2)} s (batched, ~${PI.laya_tokens} tokens), LLM ${(PI.llm_ms / 1000).toFixed(2)} s (~${PI.llm_tokens} prompt tokens, one forward pass). The full-archive rows multiply these measured rates by exact token counts; only the canon was actually run. A GPU changes the times, not the ratios much.`;
+}
+for (const id of ["p1", "p2"]) $(id).addEventListener("input", renderCost);
+renderCost();
+
+// ---------- live cascade ----------
+const M = { laya: null, llm: false };
+const status = (t, warn) => { $("status").textContent = t; $("status").classList.toggle("warn", !!warn); };
+const prog = (f) => { $("prog").style.width = f == null ? "0" : (f * 100).toFixed(1) + "%"; };
+const canRun = () => { $("run").disabled = !M.laya; $("bench").disabled = !M.laya; };
+$("loadLaya").addEventListener("click", async () => {
+  $("loadLaya").disabled = true;
+  try {
+    const { loadLaya } = await import("./model.js");
+    const r = await loadLaya({ variant: $("variant").value, onStatus: status, onProgress: prog });
+    M.laya = r.laya; prog(1);
+    status(`Laya ready on ${r.backend.toUpperCase()} (${r.info.label}${r.info.fromCache ? ", from cache" : ""}, ${r.info.threads} thread${r.info.threads > 1 ? "s" : ""}).`);
+  } catch (e) { status("Laya failed to load: " + e.message, true); $("loadLaya").disabled = false; }
+  canRun();
+});
+$("loadLLM").addEventListener("click", async () => {
+  $("loadLLM").disabled = true;
+  try {
+    const { loadWebLLM } = await import("./webllm.js");
+    await loadWebLLM(LLM_MODEL.webllm, { onStatus: status, onProgress: prog });
+    M.llm = true; status(`WebLLM ready: ${LLM_MODEL.webllm}.`);
+  } catch (e) { status(e.message, true); $("loadLLM").disabled = false; }
+});
+let current = null;
+$("pick").addEventListener("click", () => {
+  current = sample[Math.floor(Math.random() * sample.length)];
+  $("thread").value = current.thread; $("comment").value = current.comment;
+  $("goldNote").innerHTML = `Label: <b>${current.gold === "recommends" ? "recommends" : "not a recommendation"}</b>${current.borderline ? " (borderline)" : ""}. Offline: Laya p=${current.laya_p}, LLM p=${current.llm_p}. <a href="https://news.ycombinator.com/item?id=${current.id}" target="_blank" rel="noopener">On HN</a>`;
+});
+for (const id of ["thread", "comment"]) $(id).addEventListener("input", () => { current = null; $("goldNote").textContent = ""; });
+
+async function cascadeOne(state) {
+  const t0 = performance.now();
+  const a = (await M.laya.systemOne(state, { r: RECOMMEND_Q })).answers.r;
+  const p = a.probabilities.recommends, layaMs = performance.now() - t0;
+  const out = { p, layaMs };
+  if (p >= th.hi) out.decision = ["recommends", "Laya, confident"];
+  else if (p <= th.lo) out.decision = ["not a recommendation", "Laya, confident"];
+  else if (!M.llm) out.decision = [null, "Laya unsure; load WebLLM to finish"];
+  else {
+    const { llmJudge } = await import("./webllm.js");
+    const j = await llmJudge(state);
+    Object.assign(out, { llmP: j.p, llmMs: j.ms, llmTokens: j.promptTokens });
+    out.decision = [j.p >= th.llm ? "recommends" : "not a recommendation", "LLM"];
+  }
+  return out;
+}
+const bar = (p, col, z) => `<div class="pbar"><i style="width:${(p * 100).toFixed(1)}%;background:${col}"></i>${z.map((x) => `<span class="z" style="left:${x * 100}%"></span>`).join("")}</div>`;
+$("run").addEventListener("click", async () => {
+  const text = $("comment").value.trim(); if (!text) return;
+  const state = { thread: $("thread").value.trim(), comment: win(/<a |&#x/.test(text) ? cleanComment(text) : text.replace(/https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\/\S+/gi, "[YouTube video]")) };
+  $("run").disabled = true;
+  $("steps").innerHTML = `<li class="laya"><div class="h">Stage 1 · Laya</div><div class="s">thinking…</div></li>`;
+  try {
+    const o = await cascadeOne(state);
+    let h = `<li class="laya"><div class="h">Stage 1 · Laya <span class="tag laya">p(recommends) = ${o.p.toFixed(3)}</span> <span class="muted small">${o.layaMs.toFixed(0)} ms</span></div>${bar(o.p, "var(--laya)", [th.lo, th.hi])}<div class="s">Accept at ≥ ${th.hi}, reject at ≤ ${th.lo}. ${o.p >= th.hi || o.p <= th.lo ? "Confident, so the LLM is skipped." : "Unsure, so it goes to the LLM."}</div></li>`;
+    if (o.llmP != null) h += `<li class="llm"><div class="h">Stage 2 · ${esc(LLM_MODEL.webllm)} <span class="tag llm">p(yes) = ${o.llmP.toFixed(3)}</span> <span class="muted small">${o.llmMs.toFixed(0)} ms, ${o.llmTokens ?? "?"} prompt tokens</span></div>${bar(o.llmP, "var(--llm)", [th.llm])}</li>`;
+    h += `<li class="final"><div class="h">${o.decision[0] ? esc(o.decision[0]) : "Undecided"} <span class="muted small">decided by ${esc(o.decision[1])}</span></div>${current ? `<div class="s">Label: ${current.gold === "recommends" ? "recommends" : "not a recommendation"} ${o.decision[0] ? (((o.decision[0] === "recommends") === (current.gold === "recommends")) ? "✓" : "✗") : ""}</div>` : ""}</li>`;
+    $("steps").innerHTML = h;
+  } catch (e) { $("steps").innerHTML = `<li class="final"><div class="h">Error</div><div class="s">${esc(e.message)}</div></li>`; }
+  canRun();
+});
+$("bench").addEventListener("click", async () => {
+  $("bench").disabled = $("run").disabled = true;
+  const pick = [...sample].sort(() => Math.random() - 0.5).slice(0, 10);
+  let lay = 0, llm = 0, nL = 0, ok = 0, decided = 0;
+  for (let i = 0; i < pick.length; i++) {
+    status(`Timing comment ${i + 1} of ${pick.length}…`);
+    const o = await cascadeOne({ thread: pick[i].thread, comment: pick[i].comment });
+    lay += o.layaMs; if (o.llmMs) { llm += o.llmMs; nL++; }
+    if (o.decision[0]) { decided++; ok += (o.decision[0] === "recommends") === (pick[i].gold === "recommends"); }
+    await yieldToBrowser();
+  }
+  status(`On your machine: Laya ${(lay / pick.length).toFixed(0)} ms per comment${nL ? `, LLM ${(llm / nL).toFixed(0)} ms (${nL} of ${pick.length} needed it)` : ""}. ${ok} of ${decided} decided comments matched the labels.`);
+  canRun();
+});
+</script>
+</body>
+</html>

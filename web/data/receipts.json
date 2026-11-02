@@ -1,0 +1,145 @@
+{
+ "built": "2026-11-02",
+ "hardware": "2 vCPU cloud container, no GPU (ONNX Runtime, CPU)",
+ "thresholds": {
+  "lo": 0.53,
+  "hi": 0.61,
+  "llm": 0.14,
+  "laya": 0.61,
+  "llm_only": 0.19
+ },
+ "stage0": {
+  "months": 237,
+  "items": 49324111,
+  "comments": 41308650,
+  "yt_comments": 257038,
+  "bytes": 12421532765,
+  "download_s": 539,
+  "process_s": 117,
+  "distinct_videos": 185909,
+  "canon_videos": 1345,
+  "by_year": {
+   "2007": 113,
+   "2008": 442,
+   "2009": 1069,
+   "2010": 2638,
+   "2011": 3393,
+   "2012": 4529,
+   "2013": 7409,
+   "2014": 7916,
+   "2015": 9951,
+   "2016": 12804,
+   "2017": 13507,
+   "2018": 15093,
+   "2019": 16921,
+   "2020": 22400,
+   "2021": 25948,
+   "2022": 27966,
+   "2023": 27877,
+   "2024": 22848,
+   "2025": 21217,
+   "2026": 12997
+  }
+ },
+ "canon": {
+  "rule": "videos linked by >=10 distinct HN commenters; 2 comments per video from different people, random (seed 7)",
+  "canon_total": 1345,
+  "judged_note": "minimal run: stopped after the first comments; videos with at least one judged comment are shown",
+  "comments": 632,
+  "videos": 540,
+  "recommended_videos": 145,
+  "routes": {
+   "laya_accept": 75,
+   "laya_reject": 404,
+   "llm": 153,
+   "llm_accept": 73
+  },
+  "laya_s": 700,
+  "llm_s": 577,
+  "laya_tokens": 75496,
+  "llm_tokens": 20631
+ },
+ "per_item": {
+  "laya_ms": 1284,
+  "llm_ms": 4111,
+  "laya_tokens": 186,
+  "llm_tokens": 197
+ },
+ "full_archive": {
+  "candidates": 257038,
+  "qwen_prompt_tokens": 50308416,
+  "laya_tokens": 43737258
+ },
+ "accuracy": {
+  "n": 300,
+  "positives": 103,
+  "summary": {
+   "laya": {
+    "n": 300,
+    "tp": 30,
+    "fp": 9,
+    "tn": 188,
+    "fn": 73,
+    "accuracy": 0.7266666666666667,
+    "accuracy_ci": [
+     0.6736064082504327,
+     0.7739952368172605
+    ],
+    "precision": 0.7692307692307693,
+    "recall": 0.2912621359223301,
+    "f1": 0.4225352112676056,
+    "ms": 1283.9066666666668,
+    "auroc": 0.7226110098073038
+   },
+   "llm": {
+    "n": 300,
+    "tp": 52,
+    "fp": 36,
+    "tn": 161,
+    "fn": 51,
+    "accuracy": 0.71,
+    "accuracy_ci": [
+     0.6562534723961281,
+     0.7584362870048228
+    ],
+    "precision": 0.5909090909090909,
+    "recall": 0.5048543689320388,
+    "f1": 0.544502617801047,
+    "ms": 4110.77,
+    "auroc": 0.7245576856734512
+   },
+   "cascade": {
+    "n": 300,
+    "tp": 52,
+    "fp": 25,
+    "tn": 172,
+    "fn": 51,
+    "accuracy": 0.7466666666666667,
+    "accuracy_ci": [
+     0.6945448785767366,
+     0.7925510292910473
+    ],
+    "precision": 0.6753246753246753,
+    "recall": 0.5048543689320388,
+    "f1": 0.5777777777777778,
+    "ms": 2462.3274,
+    "to_llm": 0.2866666666666667
+   },
+   "laya_auto_accuracy": 0.7850467289719626,
+   "laya_auto_n": 214
+  }
+ },
+ "cv": {
+  "laya": 0.7077,
+  "llm": 0.6773,
+  "cascade": 0.7117,
+  "to_llm": 0.321,
+  "method": "10 x repeated 2-fold CV: thresholds fit on 150 comments, scored on the other 150"
+ },
+ "phrasings": {
+  "choice2": 0.7226110098073038,
+  "choice3": 0.648,
+  "noul": 0.683,
+  "choice2short": 0.71
+ }
+}
